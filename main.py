@@ -1,3 +1,7 @@
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+import math
 import re
 from lxml import etree
 import time
@@ -44,27 +48,33 @@ def get_item_num(entry_url):
     r = requests.get(entry_url, verify=False)
     content = r.content.decode("utf-8")
     root = etree.HTML(content)
-    num_nodes = root.xpath('.//div[@class="content"]')
-    print(len(num_nodes))
+    num_nodes = root.xpath('.//div[@class="content "]//h2[contains(@class, "total")]/span')
     if len(num_nodes) == 0:
         raise Exception("no total number for {}".format(entry_url))
     num_str = num_nodes[0].text.strip()
-    print(int(num_str))
+    return int(num_str)
 
-def get_houses_by_sub_district(entry_url):
-    url_patt = "https://sh.ke.com/ershoufang/pg{}/"
-    url_patt = "{}/pg{}/".format(entry_url)
+def get_houses_by_sub_district(sub_distr_id, entry_url):
+    url_patt = entry_url + "pg{}/"
 
+    total_num = get_item_num(entry_url)
+    last_page = math.ceil(total_num/30)
     i = 1
     client = pymongo.MongoClient()
     db = client.beike
-    while True:
+    for i in range(1, last_page+1, 1):
         url = url_patt.format(i)
-        print(url)
         r = requests.get(url, verify=False)
         content = r.content.decode("utf-8")
         root = etree.HTML(content)
         ul_node = root.find('.//ul[@class="sellListContent"]')
+        while ul_node is None:
+            print(url)
+            r = requests.get(url, verify=False)
+            content = r.content.decode("utf-8")
+            root = etree.HTML(content)
+            ul_node = root.find('.//ul[@class="sellListContent"]')
+
         div_info = ul_node.xpath('.//div[contains(@class, "info")]')
         for div_node in div_info:
             title_nodes = div_node.xpath('./div[@class="title"]/a[contains(@class, "maidian-detail")]')
@@ -73,6 +83,7 @@ def get_houses_by_sub_district(entry_url):
                 continue
             title_node = title_nodes[0]
             title = title_node.text
+            maidian = title_node.attrib["data-maidian"]
             url = title_node.attrib["href"]
 
             xiaoqu_nodes = div_node.xpath('./div[@class="address"]/div[@class="houseInfo"]/a')
@@ -129,6 +140,8 @@ def get_houses_by_sub_district(entry_url):
                 unit_price = up_node.attrib["data-price"]
 
             item = {
+                "item_id": maidian,
+                "sub_distr_id": sub_distr_id,
                 "title": title,
                 "url": url,
                 "house_info": house_info,
@@ -149,9 +162,145 @@ def get_all_houses():
     client = pymongo.MongoClient()
     db = client.beike
     sub_distr_rows = db.sub_districts.find()
+    start = 0
     for sub_distr in sub_distr_rows:
         entry_url = sub_distr["url"]
-        get_houses_by_sub_district(entry_url)
+        sub_distr_id = sub_distr["_id"]
+        distr_name = sub_distr["district"]
+        sub_distr_name = sub_distr["sub_district"]
+        print(distr_name, sub_distr_name)
+        if distr_name == "杨浦" and sub_distr_name == "新江湾城":
+            start = 1
+        if start == 1:
+            get_houses_by_sub_district(sub_distr_id, entry_url)
+
+def parse_house_info(house_info):
+    items = house_info.split("|")
+    house_type = "apartment"
+    matched = re.search(r'别墅', items[1])
+    info_items = items[1:]
+    if matched:
+        info_items = items[2:]
+        house_type = "house"
+
+    room_info = info_items[0]
+    size_info = info_items[1]
+    direc_info = info_items[2]
+    decor_info = info_items[3]
+    lift_info = ""
+    if len(info_items) >= 5:
+        lift_info = info_items[4]
+    matched = re.search(r'(\d+)室(\d+)厅', room_info)
+    shi_num = 0
+    ting_num = 0
+    if matched:
+        shi_num = int(matched.group(1))
+        ting_num = int(matched.group(2))
+
+    matched = re.search(r'([.0-9]+)平米', size_info)
+    size = 0.0
+    if matched:
+        size = float(matched.group(1))
+
+    has_lift = None
+    if re.search(r'有电梯', lift_info):
+        has_lift = True
+    elif re.search(r'无电梯', lift_info):
+        has_lift = False
+    result = {"house_type": house_type,
+        "shi_num": shi_num,
+        "ting_num": ting_num,
+        "size": size,
+        "has_lift": has_lift,
+        "direction": direc_info,
+        "decoration": decor_info,
+    }
+    return result
+
+def update_house_info():
+    client = pymongo.MongoClient()
+    db = client.beike
+    houses = db.house.find()
+    for house in houses:
+        info = parse_house_info(house["house_info"])
+        db.house.update({"_id": house["_id"]}, {"$set": info})
+
+def stats():
+    client = pymongo.MongoClient()
+    db = client.beike
+    print("=========== biggest houses =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$sort": {"size": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["title"], house["size"], house["xiaoqu_name"])
+
+    print("=========== most number of houses xiaoqu name =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$group": {"_id": "$xiaoqu_name", "xiaoqu_name": {"$first": "$xiaoqu_name"}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["xiaoqu_name"], house["count"])
+
+    print("=========== most expensive xiaoqu name =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$group": {"_id": "$xiaoqu_name", "xiaoqu_name": {"$first": "$xiaoqu_name"}, "avg_unit_price": {"$avg": "$unit_price"}}},
+        {"$sort": {"avg_unit_price": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["xiaoqu_name"], house["avg_unit_price"])
+
+    print("=========== most expensive sub district =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$group": {"_id": "$sub_districts.sub_district", "sub_district_name": {"$first": "$sub_districts.sub_district"}, "avg_unit_price": {"$avg": "$unit_price"}}},
+        {"$sort": {"avg_unit_price": -1}},
+        {"$limit": 20}
+    ])
+    for house in houses:
+        print(house["sub_district_name"], house["avg_unit_price"])
+
+    print("=========== most expensive district =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$group": {"_id": "$sub_districts.district", "district_name": {"$first": "$sub_districts.district"}, "avg_unit_price": {"$avg": "$unit_price"}}},
+        {"$sort": {"avg_unit_price": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["district_name"], house["avg_unit_price"])
+
+    print("=========== most expensive =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_district"}},
+        {"$unwind": "$sub_district"},
+        {"$sort": {"price_num": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["title"], house["url"], house["xiaoqu_name"], house["price_num"], house["unit_price"])
+
+    print("=========== most expensive unit price =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_district"}},
+        {"$unwind": "$sub_district"},
+        {"$sort": {"unit_price": -1}},
+        {"$limit": 10}
+    ])
+    for house in houses:
+        print(house["title"], house["url"], house["xiaoqu_name"], house["price_num"], house["unit_price"])
 
 if __name__ == "__main__":
-    get_item_num("https://sh.ke.com/ershoufang/beicai/")
+    stats()
