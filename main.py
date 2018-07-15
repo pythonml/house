@@ -228,6 +228,12 @@ def update_house_info():
 def stats():
     client = pymongo.MongoClient()
     db = client.beike
+
+    print("=========== apartment/house =============")
+    apart_num = db.house.find({"house_type": "apartment"}).count()
+    house_num = db.house.find({"house_type": "house"}).count()
+    print(apart_num, house_num)
+
     print("=========== biggest houses =============")
     houses = db.house.aggregate([
         {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
