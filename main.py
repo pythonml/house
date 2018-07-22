@@ -229,6 +229,44 @@ def stats():
     client = pymongo.MongoClient()
     db = client.beike
 
+    print("=========== most expensive xiaoqu in each district =============")
+    districts = db.sub_districts.aggregate([
+        {"$group": {"_id": "$district", "district_name": {"$first": "$district"}, "sub_districts": {"$push": "$_id"}}},
+    ])
+    for district in districts:
+        district_name = district["district_name"]
+        sub_districts = district["sub_districts"]
+        xiaoqus = db.house.aggregate([
+            {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+            {"$unwind": "$sub_districts"},
+            {"$match": {"sub_districts.district": district_name}},
+            {"$group": {"_id": "$xiaoqu_name", "district_name": {"$first": "$sub_districts.district"}, "xiaoqu_name": {"$first": "$xiaoqu_name"}, "avg_price": {"$avg": "$unit_price"}, "count": {"$sum": 1}}},
+            {"$match": {"count": {"$gte": 3}}},
+            {"$sort": {"avg_price": -1}},
+            {"$limit": 1},
+        ])
+        for xiaoqu in xiaoqus:
+            print(xiaoqu["district_name"], xiaoqu["xiaoqu_name"], xiaoqu["avg_price"], xiaoqu["count"])
+
+    print("=========== cheapest xiaoqu in each district =============")
+    districts = db.sub_districts.aggregate([
+        {"$group": {"_id": "$district", "district_name": {"$first": "$district"}, "sub_districts": {"$push": "$_id"}}},
+    ])
+    for district in districts:
+        district_name = district["district_name"]
+        sub_districts = district["sub_districts"]
+        xiaoqus = db.house.aggregate([
+            {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+            {"$unwind": "$sub_districts"},
+            {"$match": {"sub_districts.district": district_name}},
+            {"$group": {"_id": "$xiaoqu_name", "district_name": {"$first": "$sub_districts.district"}, "xiaoqu_name": {"$first": "$xiaoqu_name"}, "avg_price": {"$avg": "$unit_price"}, "count": {"$sum": 1}}},
+            {"$match": {"count": {"$gte": 3}}},
+            {"$sort": {"avg_price": 1}},
+            {"$limit": 1},
+        ])
+        for xiaoqu in xiaoqus:
+            print(xiaoqu["district_name"], xiaoqu["xiaoqu_name"], xiaoqu["avg_price"], xiaoqu["count"])
+
     print("=========== average unit price =============")
     houses = db.house.find()
     total = 0
@@ -269,6 +307,17 @@ def stats():
     ])
     for house in houses:
         print(house["title"], house["size"], house["xiaoqu_name"])
+
+    print("=========== most number of houses district name =============")
+    houses = db.house.aggregate([
+        {"$lookup": {"from": "sub_districts", "localField": "sub_distr_id", "foreignField": "_id", "as": "sub_districts"}},
+        {"$unwind": "$sub_districts"},
+        {"$match": {"sub_districts": {"$ne": []}}},
+        {"$group": {"_id": "$sub_districts.district", "district_name": {"$first": "$sub_districts.district"}, "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+    ])
+    for house in houses:
+        print(house["district_name"], house["count"])
 
     print("=========== most number of houses xiaoqu name =============")
     houses = db.house.aggregate([
