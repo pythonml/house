@@ -9,8 +9,11 @@ import json
 import pymongo
 import requests
 
+DB = "hangzhou"
+base_url = "https://hz.ke.com"
+
 def get_disctricts():
-    url = "https://sh.ke.com/ershoufang/"
+    url = base_url + "/ershoufang/"
     r = requests.get(url, verify=False)
     content = r.content.decode("utf-8")
     root = etree.HTML(content)
@@ -18,7 +21,11 @@ def get_disctricts():
     result = []
     for node in distr_nodes:
         rel_url = node.attrib["href"]
-        distr_url = "https://sh.ke.com" + rel_url
+        distr_url = ""
+        if re.match(r'https://', rel_url):
+            distr_url = rel_url
+        else:
+            distr_url = base_url + rel_url
         distr_name = node.text
         result.append([distr_name, distr_url])
     return result
@@ -27,7 +34,7 @@ def get_sub_districts():
     districts = get_disctricts()
     result = []
     client = pymongo.MongoClient()
-    db = client.beike
+    db = client[DB]
     for item in districts:
         distr_name = item[0]
         distr_url = item[1]
@@ -37,7 +44,7 @@ def get_sub_districts():
         subdistr_nodes = root.xpath('.//div[@class="m-filter"]//div[@data-role="ershoufang"]/div')[1].xpath('./a')
         for node in subdistr_nodes:
             sub_distr_name = node.text
-            sub_distr_url = "https://sh.ke.com" + node.attrib["href"]
+            sub_distr_url = base_url + node.attrib["href"]
             db.sub_districts.insert_one({
                 "district": distr_name,
                 "sub_district": sub_distr_name,
@@ -61,20 +68,21 @@ def get_houses_by_sub_district(sub_distr_id, entry_url):
     last_page = math.ceil(total_num/30)
     i = 1
     client = pymongo.MongoClient()
-    db = client.beike
+    db = client[DB]
     for i in range(1, last_page+1, 1):
         url = url_patt.format(i)
         r = requests.get(url, verify=False)
         content = r.content.decode("utf-8")
         root = etree.HTML(content)
-        ul_node = root.find('.//ul[@class="sellListContent"]')
-        while ul_node is None:
+        content_node = root.find('.//div[@class="content "]')
+        if content_node is None:
             print(url)
             r = requests.get(url, verify=False)
             content = r.content.decode("utf-8")
             root = etree.HTML(content)
-            ul_node = root.find('.//ul[@class="sellListContent"]')
+            ul_node = root.find('.//div[@class="content "]')
 
+        ul_node = root.find('.//ul[@class="sellListContent"]')
         div_info = ul_node.xpath('.//div[contains(@class, "info")]')
         for div_node in div_info:
             title_nodes = div_node.xpath('./div[@class="title"]/a[contains(@class, "maidian-detail")]')
@@ -160,17 +168,17 @@ def get_houses_by_sub_district(sub_distr_id, entry_url):
 
 def get_all_houses():
     client = pymongo.MongoClient()
-    db = client.beike
+    db = client[DB]
     sub_distr_rows = db.sub_districts.find()
-    start = 0
+    start = 1
     for sub_distr in sub_distr_rows:
         entry_url = sub_distr["url"]
         sub_distr_id = sub_distr["_id"]
         distr_name = sub_distr["district"]
         sub_distr_name = sub_distr["sub_district"]
         print(distr_name, sub_distr_name)
-        if distr_name == "杨浦" and sub_distr_name == "新江湾城":
-            start = 1
+        #if distr_name == "福田区" and sub_distr_name == "银湖":
+        #    start = 1
         if start == 1:
             get_houses_by_sub_district(sub_distr_id, entry_url)
 
@@ -183,6 +191,16 @@ def parse_house_info(house_info):
         info_items = items[2:]
         house_type = "house"
 
+    if len(info_items) < 4:
+        print(house_info)
+        return {"house_type": "",
+            "shi_num": -1,
+            "ting_num": -1,
+            "size": -1,
+            "has_lift": -1,
+            "direction": "",
+            "decoration": "",
+        }
     room_info = info_items[0]
     size_info = info_items[1]
     direc_info = info_items[2]
@@ -219,15 +237,39 @@ def parse_house_info(house_info):
 
 def update_house_info():
     client = pymongo.MongoClient()
-    db = client.beike
+    db = client[DB]
     houses = db.house.find()
     for house in houses:
+        object_id = house["_id"]
+        price_num = float(house["price_num"])
+        unit_price = float(house["unit_price"])
+        building_info = house["building_info"]
+        matched = re.search(r'(\d+)年', building_info)
+        build_year = 0
+        if matched:
+            build_year = int(matched.group(1))
+        db.house.update({"_id": house["_id"]}, {"$set": {"price_num": price_num, "unit_price": unit_price, "build_year": build_year}})
         info = parse_house_info(house["house_info"])
         db.house.update({"_id": house["_id"]}, {"$set": info})
 
 def stats():
     client = pymongo.MongoClient()
-    db = client.beike
+    db = client[DB]
+
+    print("=========== average house age =============")
+    houses = db.house.aggregate([
+        {"$match": {"build_year": {"$gt": 0}}},
+    ])
+    total = 0
+    count = 0
+    for house in houses:
+        total += house["build_year"]
+        count += 1
+    avg_build_year = total/count
+    avg_age = 2018 - avg_build_year
+    print(avg_age)
+    import sys
+    sys.exit(1)
 
     print("=========== most expensive xiaoqu in each district =============")
     districts = db.sub_districts.aggregate([
