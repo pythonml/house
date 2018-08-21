@@ -9,15 +9,15 @@ import json
 import pymongo
 import requests
 
-DB = "guangzhou"
-base_url = "https://gz.ke.com"
+DB = "shzu"
+base_url = "https://sh.zu.ke.com"
 
 def get_disctricts():
-    url = base_url + "/ershoufang/"
+    url = base_url + "/zufang/"
     r = requests.get(url, verify=False)
     content = r.content.decode("utf-8")
     root = etree.HTML(content)
-    distr_nodes = root.xpath('.//div[@class="m-filter"]//div[@data-role="ershoufang"]/div/a')
+    distr_nodes = root.xpath('.//div[@class="filter"]//ul[@data-target="area"]/li[@class="filter__item--level2  "]/a')
     result = []
     for node in distr_nodes:
         rel_url = node.attrib["href"]
@@ -41,7 +41,7 @@ def get_sub_districts():
         r = requests.get(distr_url, verify=False)
         content = r.content.decode("utf-8")
         root = etree.HTML(content)
-        subdistr_nodes = root.xpath('.//div[@class="m-filter"]//div[@data-role="ershoufang"]/div')[1].xpath('./a')
+        subdistr_nodes = root.xpath('.//div[@class="filter"]//ul[@data-target="area"]/li[@class="filter__item--level3  "]/a')
         for node in subdistr_nodes:
             sub_distr_name = node.text
             sub_distr_url = base_url + node.attrib["href"]
@@ -55,7 +55,7 @@ def get_item_num(entry_url):
     r = requests.get(entry_url, verify=False)
     content = r.content.decode("utf-8")
     root = etree.HTML(content)
-    num_nodes = root.xpath('.//div[@class="content "]//h2[contains(@class, "total")]/span')
+    num_nodes = root.xpath('.//div[@id="content"]//span[@class="content__title--hl"]')
     if len(num_nodes) == 0:
         raise Exception("no total number for {}".format(entry_url))
     num_str = num_nodes[0].text.strip()
@@ -74,94 +74,57 @@ def get_houses_by_sub_district(sub_distr_id, entry_url):
         r = requests.get(url, verify=False)
         content = r.content.decode("utf-8")
         root = etree.HTML(content)
-        content_node = root.find('.//div[@class="content "]')
-        if content_node is None:
+        content_nodes = root.xpath('.//div[@class="content__list"]')
+        if len(content_nodes) == 0:
             print(url)
             r = requests.get(url, verify=False)
             content = r.content.decode("utf-8")
             root = etree.HTML(content)
-            ul_node = root.find('.//div[@class="content "]')
 
-        ul_node = root.find('.//ul[@class="sellListContent"]')
-        div_info = ul_node.xpath('.//div[contains(@class, "info")]')
-        for div_node in div_info:
-            title_nodes = div_node.xpath('./div[@class="title"]/a[contains(@class, "maidian-detail")]')
+        div_nodes = root.xpath('.//div[@class="content__list--item"]')
+        for div_node in div_nodes:
+            title_nodes = div_node.xpath('.//p[contains(@class, content__list--item--title)]/a')
             if len(title_nodes) == 0:
                 print("title not found")
                 continue
             title_node = title_nodes[0]
-            title = title_node.text
-            maidian = title_node.attrib["data-maidian"]
+            title = title_node.text.strip()
             url = title_node.attrib["href"]
 
-            xiaoqu_nodes = div_node.xpath('./div[@class="address"]/div[@class="houseInfo"]/a')
-            xiaoqu_name = ""
-            house_info = ""
-            if len(xiaoqu_nodes) > 0:
-                xiaoqu_name = xiaoqu_nodes[0].text
-                house_info = xiaoqu_nodes[0].tail
-
-            pos_nodes = div_node.xpath('./div[@class="flood"]/div[@class="positionInfo"]/span')
-            building_info = ""
-            if len(pos_nodes) > 0:
-                building_info = pos_nodes[0].tail
-                matched = re.search(r'(.*)\s+-\s+$', building_info)
-                if matched:
-                    building_info = matched.group(1)
-
-            area_nodes = div_node.xpath('./div[@class="flood"]/div[@class="positionInfo"]/a')
+            area_nodes = div_node.xpath('.//p[@class="content__list--item--des"]')
             area = ""
-            if len(area_nodes) > 0:
-                area_node = area_nodes[0]
-                area = area_node.text
+            if len(area_nodes) == 0:
+                continue
+            area_node = area_nodes[0]
+            area = 0
+            direction = ""
+            room_type = ""
+            for node in area_node:
+                if node.tag == "a":
+                    continue
+                text = node.tail.strip()
+                matched = re.search(r'(\d+)㎡', text)
+                if matched:
+                    area = matched.group(1)
+                elif re.search(r'室', text):
+                    room_type = text
+                else:
+                    direction = text
 
-            follow_nodes = div_node.xpath('./div[@class="followInfo"]/span')
-            follow_info = ""
-            if len(follow_nodes) > 0:
-                follow_node = follow_nodes[0]
-                follow_info = follow_node.tail
-
-            subway_nodes = div_node.xpath('./div[@class="tag"]/span[@class="subway"]')
-            subway_info = ""
-            if len(subway_nodes) > 0:
-                subway_node = subway_nodes[0]
-                subway_info = subway_node.text
-
-            tax_nodes = div_node.xpath('./div[@class="tag"]/span[@class="taxfree"]')
-            tax_info = ""
-            if len(tax_nodes) > 0:
-                tax_node = tax_nodes[0]
-                tax_info = tax_node.text
-
-            price_nodes = div_node.xpath('./div[@class="priceInfo"]/div[@class="totalPrice"]/span')
-            price_num = 0
-            price_unit = ""
+            price_nodes = div_node.xpath('.//span[@class="content__list--item-price"]/em')
+            price_info = 0
             if len(price_nodes) > 0:
                 price_node = price_nodes[0]
-                price_num = price_node.text
-                price_unit = price_node.tail
-
-            up_nodes = div_node.xpath('./div[@class="priceInfo"]/div[@class="unitPrice"]')
-            unit_price = 0
-            if len(up_nodes) > 0:
-                up_node = up_nodes[0]
-                unit_price = up_node.attrib["data-price"]
+                price_info = price_node.text
 
             item = {
-                "item_id": maidian,
                 "sub_distr_id": sub_distr_id,
                 "title": title,
                 "url": url,
-                "house_info": house_info,
-                "xiaoqu_name": xiaoqu_name,
-                "building_info": building_info,
                 "area": area,
-                "follow_info": follow_info,
-                "subway_info": subway_info,
-                "tax_info": tax_info,
-                "price_num": price_num,
-                "price_unit": price_unit,
-                "unit_price": unit_price,
+                "direction": direction,
+                "room_type": room_type,
+                "price_info": price_info,
             }
             db.house.insert_one(item)
         i += 1
@@ -354,10 +317,10 @@ def stats():
         {"$unwind": "$sub_districts"},
         {"$match": {"sub_districts": {"$ne": []}}},
         {"$sort": {"size": -1}},
-        {"$limit": 15}
+        {"$limit": 20}
     ])
     for house in houses:
-        print("{},{},{},{},{},{}".format(house["title"], house["sub_districts"]["district"], house["sub_districts"]["sub_district"], house["size"], house["xiaoqu_name"], house["price_num"]))
+        print("{},{},{},{},{}".format(house["sub_districts"]["district"], house["xiaoqu_name"], house["title"], house["size"], house["price_num"]))
 
     print("=========== most number of houses district name =============")
     houses = db.house.aggregate([
@@ -428,4 +391,4 @@ def stats():
         print(house["title"], house["url"], house["xiaoqu_name"], house["price_num"], house["unit_price"])
 
 if __name__ == "__main__":
-    stats()
+    get_all_houses()
