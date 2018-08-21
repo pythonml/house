@@ -9,8 +9,8 @@ import json
 import pymongo
 import requests
 
-DB = "hangzhou"
-base_url = "https://hz.ke.com"
+DB = "shenzhen"
+base_url = "https://sz.ke.com"
 
 def get_disctricts():
     url = base_url + "/ershoufang/"
@@ -268,8 +268,6 @@ def stats():
     avg_build_year = total/count
     avg_age = 2018 - avg_build_year
     print(avg_age)
-    import sys
-    sys.exit(1)
 
     print("=========== most expensive xiaoqu in each district =============")
     districts = db.sub_districts.aggregate([
@@ -345,10 +343,10 @@ def stats():
         {"$unwind": "$sub_districts"},
         {"$match": {"sub_districts": {"$ne": []}}},
         {"$sort": {"size": -1}},
-        {"$limit": 10}
+        {"$limit": 15}
     ])
     for house in houses:
-        print(house["title"], house["size"], house["xiaoqu_name"])
+        print("{},{},{},{},{},{}".format(house["title"], house["sub_districts"]["district"], house["sub_districts"]["sub_district"], house["size"], house["xiaoqu_name"], house["price_num"]))
 
     print("=========== most number of houses district name =============")
     houses = db.house.aggregate([
